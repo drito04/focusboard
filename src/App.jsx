@@ -704,6 +704,10 @@ const CSS=`
 .auth-btn:disabled{opacity:0.5;cursor:not-allowed;}
 .auth-switch{text-align:center;margin-top:16px;font-family:var(--fm);font-size:11px;color:var(--m);}
 .auth-switch button{background:none;border:none;color:var(--a);cursor:pointer;font-family:var(--fm);font-size:11px;text-decoration:underline;}
+.auth-pw-wrap{position:relative;display:flex;align-items:center;}
+.auth-pw-wrap .auth-inp{padding-right:40px;width:100%;}
+.auth-pw-toggle{position:absolute;right:12px;background:none;border:none;cursor:pointer;color:var(--m);font-size:15px;line-height:1;padding:0;transition:color 0.15s;}
+.auth-pw-toggle:hover{color:var(--a);}
 .auth-err{background:rgba(224,107,107,0.1);border:1px solid rgba(224,107,107,0.3);border-radius:7px;padding:10px 14px;font-family:var(--fm);font-size:11px;color:var(--d);margin-bottom:14px;}
 .auth-ok{background:rgba(110,207,168,0.1);border:1px solid rgba(110,207,168,0.3);border-radius:7px;padding:10px 14px;font-family:var(--fm);font-size:11px;color:var(--a3);margin-bottom:14px;}
 .sync-badge{display:flex;align-items:center;gap:4px;font-family:var(--fm);font-size:8px;color:var(--a3);border-radius:3px;padding:0;background:none;border:none;}
@@ -794,9 +798,42 @@ function daysUntil(d){if(!d)return null;const diff=new Date(d)-new Date();return
 // ── localStorage persistence ─────────────────────────────────
 const STORE_KEY = "focusboard_v1";
 
+// ── Handle email confirmation redirect ───────────────────────
+// When Supabase redirects after email confirmation, it appends
+// #access_token=...&refresh_token=...&type=signup to the URL.
+// We parse it here, store the token, then clean the URL.
+(()=>{
+  try {
+    const hash = window.location.hash;
+    if (!hash) return;
+    const params = new URLSearchParams(hash.replace(/^#/, ""));
+    const token = params.get("access_token");
+    const uid = params.get("user_id") || "";
+    const type = params.get("type");
+    if (token && (type === "signup" || type === "recovery" || type === "magiclink")) {
+      localStorage.setItem("sb_token", token);
+      // Fetch user info using the token
+      fetch("https://dbfupezdawtoqwionyrg.supabase.co/auth/v1/user", {
+        headers: {
+          "apikey": localStorage.getItem("sb_anon_key") || "",
+          "Authorization": `Bearer ${token}`,
+        }
+      }).then(r=>r.json()).then(u=>{
+        if (u?.id) {
+          localStorage.setItem("sb_uid", u.id);
+          localStorage.setItem("sb_email", u.email || "");
+        }
+      }).catch(()=>{});
+      // Clean the URL without reloading
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  } catch(e) { /* ignore */ }
+})();
+
 // ── Supabase config ───────────────────────────────────────────
-const SB_URL = "https://dbfupezdawtoqwionyrg.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRiZnVwZXpkYXd0b3F3aW9ueXJnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwOTI1NDYsImV4cCI6MjA4OTY2ODU0Nn0.dwgk55nj_4_PMSCrcFKMrNSRbNpjitz9UXy8SG15LHc";
+const SB_URL = import.meta.env.VITE_SB_URL || "https://dbfupezdawtoqwionyrg.supabase.co";
+const SB_KEY = import.meta.env.VITE_SB_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRiZnVwZXpkYXd0b3F3aW9ueXJnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwOTI1NDYsImV4cCI6MjA4OTY2ODU0Nn0.dwgk55nj_4_PMSCrcFKMrNSRbNpjitz9UXy8SG15LHc";
+localStorage.setItem("sb_anon_key", SB_KEY); // make available to confirmation handler
 
 const sbFetch = async (path, opts={}) => {
   const token = localStorage.getItem("sb_token");
@@ -813,6 +850,13 @@ const sbFetch = async (path, opts={}) => {
   const text = await res.text();
   const body = text ? JSON.parse(text) : {};
   if (!res.ok) {
+    // Token expired — clear session so user is prompted to sign in again
+    if (res.status === 401) {
+      localStorage.removeItem("sb_token");
+      localStorage.removeItem("sb_uid");
+      localStorage.removeItem("sb_email");
+      window.location.reload();
+    }
     const msg = body.message || body.error_description || body.error || body.msg || `HTTP ${res.status}: ${res.statusText}`;
     console.error("Supabase error:", res.status, body);
     throw new Error(msg);
@@ -874,6 +918,7 @@ export default function App(){
   const [authLoading,setAuthLoading]=useState(false);
   const [authErr,setAuthErr]=useState("");
   const [authOk,setAuthOk]=useState("");
+  const [showPw,setShowPw]=useState(false);
   const [syncStatus,setSyncStatus]=useState("idle"); // idle | syncing | ok | err
   const [lastSync,setLastSync]=useState("");
 
@@ -922,7 +967,7 @@ export default function App(){
   const [wrPriorities,setWrPriorities]=useState("");
 
   // HOME STATE
-  const [userName,setUserName]=useState(()=>sv("userName","Ritobrata"));
+  const [userName,setUserName]=useState(()=>sv("userName",""));
   const [avatarEmoji,setAvatarEmoji]=useState(()=>sv("avatarEmoji",""));  // empty = use initials
   const [avatarColor,setAvatarColor]=useState(()=>sv("avatarColor","#c8a96e"));
   const [showProfileEdit,setShowProfileEdit]=useState(false);
@@ -930,22 +975,12 @@ export default function App(){
   const [editEmoji,setEditEmoji]=useState("");
   const AVATAR_COLORS=["#c8a96e","#9b7fd4","#6ecfa8","#e06b6b","#6baae0","#e06bb5","#6ecfc8","#e0c86b"];
   const AVATAR_EMOJIS=["","👨‍💻","🧑‍💻","👨‍🎓","🧑‍🎓","🦁","🐉","🚀","⚡","🔥","🎯","💎","🌟","🦊","🐺","🤖"];
-  const [dayStatus,setDayStatus]=useState(()=>sv("dayStatus","Day 1 of placement prep · let's make it count"));
-  const [focusToday,setFocusToday]=useState(()=>sv("focusToday","Complete the YOLO mAP comparison run"));
+  const [dayStatus,setDayStatus]=useState(()=>sv("dayStatus",""));
+  const [focusToday,setFocusToday]=useState(()=>sv("focusToday",""));
   const [qaMode,setQaMode]=useState("task"); // task | win | note
   const [qaText,setQaText]=useState("");
   const [feedTab,setFeedTab]=useState("today");
-  const [achievements,setAchievements]=useState(()=>sv("achievements",[
-    {id:1,icon:"✓",text:"Finished net melon dataset training",time:"2h ago",day:"today"},
-    {id:2,icon:"🔥",text:"4-day check-in streak maintained",time:"today",day:"today"},
-    {id:3,icon:"💡",text:"Arrays marked Confident in DSA",time:"yesterday",day:"week"},
-    {id:4,icon:"📌",text:"Applied to Sparsa AI — Full Stack AI Intern",time:"Mar 18",day:"week"},
-    {id:5,icon:"⏱",text:"2h 14m focused session — News Dashboard",time:"Mar 18",day:"week"},
-    {id:6,icon:"✓",text:"Frontend connected to Spring Boot backend",time:"Mar 17",day:"week"},
-    {id:7,icon:"📚",text:"Read Attention Is All You Need paper",time:"Mar 16",day:"month"},
-    {id:8,icon:"🚀",text:"Resume Analyzer project created",time:"Mar 15",day:"month"},
-    {id:9,icon:"💼",text:"Applied to Google via campus portal",time:"Mar 14",day:"month"},
-  ]));
+  const [achievements,setAchievements]=useState(()=>sv("achievements",[]));
 
   const QUOTES=[
     {text:"First, solve the problem. Then, write the code.",author:"John Johnson"},
@@ -967,23 +1002,7 @@ export default function App(){
   const todayQuote=QUOTES[new Date().getDate()%QUOTES.length];
 
   // GOALS
-  const [goals,setGoals]=useState(()=>sv("goals",[
-    {id:1,title:"Complete YOLO plant disease detection project",cat:"Project",priority:"High",deadline:"2025-04-30",progress:55,subGoals:[
-      {id:101,text:"Finish net melon dataset training",done:true},
-      {id:102,text:"Run YOLOv9 vs YOLOv8 comparison",done:false},
-      {id:103,text:"Write final evaluation report",done:false},
-    ],sgExpanded:true,linkedProject:"YOLO Disease Detection",linkedDSA:false,dsaTarget:0,monthPinned:true},
-    {id:2,title:"Build Smart Resume Analyzer MVP",cat:"Project",priority:"Med",deadline:"2025-05-15",progress:20,subGoals:[
-      {id:201,text:"Set up FastAPI backend",done:false},
-      {id:202,text:"PDF parsing module",done:false},
-      {id:203,text:"Score UI in React",done:false},
-    ],sgExpanded:false,linkedProject:"Resume Analyzer",linkedDSA:false,dsaTarget:0,monthPinned:true},
-    {id:3,title:"Solve 100 DSA problems total",cat:"Learning",priority:"Med",deadline:"",progress:40,subGoals:[],sgExpanded:false,linkedProject:"",linkedDSA:true,dsaTarget:100,monthPinned:false},
-    {id:4,title:"Revise OS & CN for placements",cat:"Career",priority:"High",deadline:"2025-05-01",progress:20,subGoals:[
-      {id:401,text:"OS: Processes, scheduling, deadlocks",done:false},
-      {id:402,text:"CN: OSI, TCP/UDP, HTTP",done:false},
-    ],sgExpanded:false,linkedProject:"",linkedDSA:false,dsaTarget:0,monthPinned:true},
-  ]));
+  const [goals,setGoals]=useState(()=>sv("goals",[]));
   const [sgm,setSgm]=useState(false);
   const [ng,setNg]=useState({title:"",cat:"Project",priority:"Med",deadline:"",linkedProject:"",progress:0});
   const [goalView,setGoalView]=useState("bento");
@@ -1032,11 +1051,7 @@ export default function App(){
   };
 
   // TASKS
-  const [tasks,setTasks]=useState(()=>sv("tasks",{
-    do:[{id:1,text:"Push latest YOLO training results",done:false}],
-    plan:[{id:2,text:"Design Resume Analyzer architecture",done:false}],
-    delegate:[],drop:[{id:3,text:"Reorganize Downloads folder",done:false}],
-  }));
+  const [tasks,setTasks]=useState(()=>sv("tasks",{do:[],plan:[],delegate:[],drop:[]}));
   const [tInp,setTInp]=useState({do:"",plan:"",delegate:"",drop:""});
 
   // WEEK
@@ -1046,11 +1061,7 @@ export default function App(){
   const tdi=new Date().getDay();
 
   // PROJECTS
-  const [projs,setProjs]=useState(()=>sv("projs",[
-    {id:1,name:"YOLO Disease Detection",stack:["Python","YOLOv8","Colab"],color:"#c8a96e",tasks:{backlog:["Try YOLOv9 on dragon fruit dataset","Write evaluation script"],inprogress:["Net melon training run","Tune hyperparameters"],review:["mAP comparison table"],done:["Dataset preprocessing","YOLOv8 baseline"]}},
-    {id:2,name:"News Dashboard",stack:["React","Spring Boot","MySQL"],color:"#9b7fd4",tasks:{backlog:["Add dark mode toggle","Write unit tests"],inprogress:["YouTube IFrame integration"],review:["CORS config review"],done:["MySQL schema setup","Backend API routes","Frontend connected"]}},
-    {id:3,name:"Resume Analyzer",stack:["FastAPI","React","LLM"],color:"#6ecfa8",tasks:{backlog:["PDF parsing module","Prompt engineering","Score UI"],inprogress:["Project setup"],review:[],done:[]}},
-  ]));
+  const [projs,setProjs]=useState(()=>sv("projs",[]));
   const [ap,setAp]=useState(0);
   const [ki,setKi]=useState({});
   const [spm,setSpm]=useState(false);
@@ -1060,37 +1071,18 @@ export default function App(){
 
   // PLACEMENTS
   const [plTab,setPlTab]=useState("pipeline");
-  const [apps,setApps]=useState(()=>sv("apps",[
-    {id:1,company:"Google",role:"SWE Intern",stage:"Applied",deadline:"2025-03-30",notes:"Via campus portal"},
-    {id:2,company:"Microsoft",role:"SDE Intern",stage:"OA",deadline:"2025-04-05",notes:"OA link received"},
-    {id:3,company:"Flipkart",role:"SDE",stage:"Researching",deadline:"",notes:"Check campus drive"},
-    {id:4,company:"Infosys",role:"Systems Engineer",stage:"Interview",deadline:"2025-04-12",notes:"Round 1 done"},
-    {id:5,company:"Sparsa AI",role:"Full Stack AI Intern",stage:"Applied",deadline:"2025-04-01",notes:"Cover letter sent"},
-  ]));
+  const [apps,setApps]=useState(()=>sv("apps",[]));
   const [af,setAf]=useState("All");
   const [sam,setSam]=useState(false);
   const [na,setNa]=useState({company:"",role:"",stage:"Researching",deadline:"",notes:""});
 
   // INTERVIEW PREP
-  const [iprep,setIprep]=useState(()=>sv("iprep",[
-    {id:1,company:"Microsoft",expanded:false,rounds:[
-      {num:"Round 1",type:"OA",notes:"LeetCode-style, 2 medium problems",status:"done"},
-      {num:"Round 2",type:"Technical",notes:"Arrays & System Design basics — pending",status:"pending"},
-    ]},
-    {id:2,company:"Infosys",expanded:true,rounds:[
-      {num:"Round 1",type:"Aptitude + Coding",notes:"Solved both coding Qs. Aptitude was straightforward",status:"done"},
-      {num:"Round 2",type:"HR",notes:"Scheduled for Apr 15",status:"pending"},
-    ]},
-  ]));
+  const [iprep,setIprep]=useState(()=>sv("iprep",[]));
   const [sipm,setSipm]=useState(false);
   const [nip,setNip]=useState({company:"",rounds:[{num:"Round 1",type:"OA",notes:"",status:"pending"}]});
 
   // RESUME VERSIONS
-  const [resumes,setResumes]=useState(()=>sv("resumes",[
-    {id:1,version:"v1.0",date:"2025-02-10",companies:["Infosys","TCS","Wipro"],changes:"Initial version — added YOLO project"},
-    {id:2,version:"v1.1",date:"2025-03-01",companies:["Google","Microsoft","Flipkart"],changes:"Quantified metrics, added News Dashboard project, restructured skills section"},
-    {id:3,version:"v1.2",date:"2025-03-18",companies:["Sparsa AI"],changes:"Tailored for Full Stack AI role — led with ML projects, added prompt engineering"},
-  ]));
+  const [resumes,setResumes]=useState(()=>sv("resumes",[]));
   const [srm,setSrm]=useState(false);
   const [nr,setNr]=useState({version:"",date:"",companies:"",changes:""});
 
@@ -1146,26 +1138,7 @@ export default function App(){
 
   // ACADEMICS
   const [aTab,setATab]=useState("countdown");
-  const [subs,setSubs]=useState(()=>sv("subs",[
-    {id:1,name:"Machine Learning",att:38,tot:45,exam:"2025-05-10",grade:"O",topics:[
-      {n:"Supervised Learning",s:"confident"},{n:"Unsupervised Learning",s:"confident"},
-      {n:"Neural Networks",s:"shaky"},{n:"CNNs & RNNs",s:"shaky"},
-      {n:"Evaluation Metrics",s:"confident"},{n:"Feature Engineering",s:"not_started"},
-    ]},
-    {id:2,name:"Software Engineering",att:28,tot:40,exam:"2025-05-14",grade:"A+",topics:[]},
-    {id:3,name:"Database Systems",att:35,tot:44,exam:"2025-05-12",grade:"A",topics:[
-      {n:"ER Diagrams & Schema",s:"confident"},{n:"SQL Joins & Queries",s:"confident"},
-      {n:"Normalization",s:"shaky"},{n:"Transactions",s:"not_started"},
-      {n:"Indexing & Query Opt.",s:"not_started"},
-    ]},
-    {id:4,name:"Computer Networks",att:22,tot:38,exam:"2025-05-16",grade:"B+",topics:[
-      {n:"OSI & TCP/IP Model",s:"not_started"},{n:"Application Layer (HTTP/DNS)",s:"shaky"},
-      {n:"Transport Layer (TCP/UDP)",s:"shaky"},{n:"Network Layer (IP/Routing)",s:"not_started"},
-      {n:"Data Link & Physical",s:"not_started"},
-    ]},
-    {id:5,name:"Theory of Computation",att:18,tot:36,exam:"2025-05-18",grade:"B",topics:[]},
-    {id:6,name:"Deep Learning (Elective)",att:30,tot:34,exam:"2025-05-20",grade:"O",topics:[]},
-  ]));
+  const [subs,setSubs]=useState(()=>sv("subs",[]));
   const [newSubName,setNewSubName]=useState("");
   const [showNewSub,setShowNewSub]=useState(false);
   const updSub=(id,f,v)=>setSubs(s=>s.map(x=>x.id===id?{...x,[f]:v}:x));
@@ -1200,22 +1173,13 @@ export default function App(){
   const fskills=skills.filter(s=>scat==="All"||s.cat===scat);
 
   // LEARNING QUEUE
-  const [lqueue,setLqueue]=useState(()=>sv("lqueue",[
-    {id:1,title:"System Design Interview – Alex Xu",type:"Book",hrs:10,status:"inprogress",notes:"Chapter 4 done"},
-    {id:2,title:"CS50 AI with Python",type:"Course",hrs:20,status:"todo",notes:"Harvard OCW free course"},
-    {id:3,title:"FastAPI docs – advanced",type:"Docs",hrs:3,status:"todo",notes:"OAuth2 & background tasks"},
-    {id:4,title:"Attention Is All You Need (paper)",type:"Paper",hrs:2,status:"done",notes:"Read once — re-read for transformers impl"},
-  ]));
+  const [lqueue,setLqueue]=useState(()=>sv("lqueue",[]));
   const [slqm,setSlqm]=useState(false);
   const [nlq,setNlq]=useState({title:"",type:"Course",hrs:5,status:"todo",notes:""});
   const LQ_TYPES=["Course","Book","Paper","Docs","Video","Other"];
 
   // CERTIFICATIONS
-  const [certs,setCerts]=useState(()=>sv("certs",[
-    {id:1,name:"Google Cloud Associate",platform:"Coursera",targetDate:"2025-06-30",status:"inprogress",progress:35,notes:"GCP fundamentals done"},
-    {id:2,name:"AWS Solutions Architect",platform:"A Cloud Guru",targetDate:"2025-08-15",status:"todo",progress:0,notes:""},
-    {id:3,name:"TensorFlow Developer Certificate",platform:"Google",targetDate:"2025-07-01",status:"inprogress",progress:60,notes:"Model building module done"},
-  ]));
+  const [certs,setCerts]=useState(()=>sv("certs",[]));
   const [scm,setScm]=useState(false);
   const [nc,setNc]=useState({name:"",platform:"",targetDate:"",status:"todo",progress:0,notes:""});
   const CERT_STATUS={todo:"#6a6880",inprogress:"#c8a96e",done:"#6ecfa8"};
@@ -1226,14 +1190,7 @@ export default function App(){
   const [tsec,setTsec]=useState(0);
   const [tlbl,setTlbl]=useState("");
   const [tlnk,setTlnk]=useState("");
-  const [tlogs,setTlogs]=useState(()=>sv("tlogs",[
-    {id:1,type:"work",label:"YOLO model training run",link:"YOLO Disease Detection",duration:3720,startedAt:"09:14",day:tdi},
-    {id:2,type:"waste",label:"Scrolling YouTube",link:"",duration:1260,startedAt:"10:15",day:tdi},
-    {id:3,type:"work",label:"Spring Boot CORS debugging",link:"News Dashboard",duration:2880,startedAt:"11:00",day:tdi},
-    {id:4,type:"break",label:"Lunch",link:"",duration:1800,startedAt:"13:00",day:tdi},
-    {id:5,type:"work",label:"DSA practice",link:"",duration:3600,startedAt:"09:00",day:(tdi+6)%7},
-    {id:6,type:"work",label:"React components",link:"News Dashboard",duration:5400,startedAt:"14:00",day:(tdi+5)%7},
-  ]));
+  const [tlogs,setTlogs]=useState(()=>sv("tlogs",[]));
   const [pcount,setPcount]=useState(0);
   const [pphase,setPphase]=useState("work");
   const PW=25*60,PB=5*60;
@@ -1274,13 +1231,7 @@ export default function App(){
   const tyc=t=>({work:"var(--a)",break:"var(--a3)",waste:"var(--d)"}[t]||"var(--m)");
 
   // HABITS
-  const [habits,setHabits]=useState(()=>sv("habits",[
-    {id:1,name:"Solve 1 DSA problem",icon:"🧩",color:"#9b7fd4",days:[true,true,false,true,true,false,false],streak:4},
-    {id:2,name:"30 min reading / learning",icon:"📚",color:"#c8a96e",days:[true,true,true,true,false,false,false],streak:4},
-    {id:3,name:"No phone before 10am",icon:"📵",color:"#6ecfa8",days:[true,false,true,true,true,false,false],streak:2},
-    {id:4,name:"Push code to GitHub",icon:"💻",color:"#e06b6b",days:[false,true,false,true,true,false,false],streak:2},
-    {id:5,name:"10 min walk / exercise",icon:"🏃",color:"#6ecfa8",days:[true,true,true,false,true,false,false],streak:3},
-  ]));
+  const [habits,setHabits]=useState(()=>sv("habits",[]));
   const [shm,setShm]=useState(false);
   const [nh,setNh]=useState({name:"",icon:"✅",color:"#9b7fd4"});
   const toggleHabitDay=(hid,di)=>{
@@ -1298,11 +1249,7 @@ export default function App(){
   const addHabit=()=>{if(!nh.name.trim())return;setHabits(hs=>[...hs,{...nh,id:Date.now(),days:Array(7).fill(false),streak:0}]);setNh({name:"",icon:"✅",color:"#9b7fd4"});setShm(false);};
 
   // NOTES
-  const [notes,setNotes]=useState(()=>sv("notes",[
-    {id:1,title:"System Design Notes",body:"# Load Balancer\n- Distributes traffic across servers\n- Round robin vs least connections\n\n# CDN\n- Edge caching for static assets\n- Reduces latency significantly",updatedAt:"Mar 18"},
-    {id:2,title:"Interview Tips",body:"- Clarify problem before jumping to code\n- Think aloud — interviewers want to see process\n- Always ask about edge cases\n- Practice explaining O(n) complexity",updatedAt:"Mar 17"},
-    {id:3,title:"Project Ideas Backlog",body:"- Browser extension for DSA hints\n- CLI tool for resume formatting\n- Telegram bot for daily DSA problems\n- RAG system over college notes",updatedAt:"Mar 15"},
-  ]));
+  const [notes,setNotes]=useState(()=>sv("notes",[]));
   const [activeNote,setActiveNote]=useState(1);
   const [snnm,setSnnm]=useState(false);
   const curNote=notes.find(n=>n.id===activeNote);
@@ -1314,10 +1261,7 @@ export default function App(){
   const [mood,setMood]=useState(null);
   const [wt,setWt]=useState("");
   const [wins,setWins]=useState([]);
-  const [ckins,setCkins]=useState(()=>sv("ckins",[
-    {date:"Mar 18",mood:"🔥",summary:"Pushed YOLO training run, solved 2 LC problems"},
-    {date:"Mar 17",mood:"😊",summary:"Frontend connected to Spring Boot backend"},
-  ]));
+  const [ckins,setCkins]=useState(()=>sv("ckins",[]));
   const totT=Object.values(tasks).flat().length;
   const doneT=Object.values(tasks).flat().filter(t=>t.done).length;
   const avgProg=goals.length?Math.round(goals.reduce((a,g)=>a+g.progress,0)/goals.length):0;
@@ -1334,38 +1278,7 @@ export default function App(){
   const [viewMonth,setViewMonth]=useState(now2.getMonth());
   const [viewYear,setViewYear]=useState(now2.getFullYear());
   const [mgCatFil,setMgCatFil]=useState("All");
-  const [monthGoals,setMonthGoals]=useState(()=>sv("monthGoals",{
-    [`${now2.getFullYear()}-${now2.getMonth()}`]:{
-      focus:"Ship the YOLO disease detection project to 90%+ mAP. Hit 100 DSA problems total. Apply to at least 5 placement companies.",
-      goals:[
-        {id:1,title:"Reach 90% mAP on YOLO plant disease model",cat:"Project",priority:"High",progress:55,done:false,milestones:[
-          {id:11,text:"Finish net melon dataset training",done:true},
-          {id:12,text:"Run YOLOv9 comparison",done:false},
-          {id:13,text:"Write evaluation report",done:false},
-        ]},
-        {id:2,title:"Solve 50 DSA problems this month",cat:"Learning",priority:"High",progress:40,done:false,milestones:[
-          {id:21,text:"Complete Arrays & Strings (10 problems)",done:true},
-          {id:22,text:"Complete Trees (8 problems)",done:false},
-          {id:23,text:"Complete DP basics (5 problems)",done:false},
-        ]},
-        {id:3,title:"Apply to 5 placement companies",cat:"Placements",priority:"High",progress:60,done:false,milestones:[
-          {id:31,text:"Apply to Google",done:true},
-          {id:32,text:"Apply to Microsoft",done:true},
-          {id:33,text:"Apply to 3 more companies",done:false},
-        ]},
-        {id:4,title:"Build Resume Analyzer MVP",cat:"Project",priority:"Med",progress:15,done:false,milestones:[
-          {id:41,text:"Set up FastAPI backend",done:false},
-          {id:42,text:"PDF parsing module",done:false},
-          {id:43,text:"Basic scoring UI",done:false},
-        ]},
-        {id:5,title:"Revise OS and CN for placements",cat:"Academic",priority:"Med",progress:20,done:false,milestones:[
-          {id:51,text:"OS: Processes, scheduling, memory",done:false},
-          {id:52,text:"CN: OSI model, TCP/UDP, HTTP",done:false},
-        ]},
-      ],
-      retro:{went_well:"",improve:"",next_month:""},
-    }
-  }));
+  const [monthGoals,setMonthGoals]=useState(()=>sv("monthGoals",{}));
   const [smgm,setSmgm]=useState(false);
   const [nmg,setNmg]=useState({title:"",cat:"Project",priority:"Med",progress:0});
   const monthKey=`${viewYear}-${viewMonth}`;
@@ -1676,10 +1589,16 @@ export default function App(){
             </div>
             <div className="auth-field">
               <label className="auth-label">Password</label>
-              <input className="auth-inp" type="password" value={authPw}
-                onChange={e=>setAuthPw(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&handleAuth()}
-                placeholder="••••••••"/>
+              <div className="auth-pw-wrap">
+                <input className="auth-inp" type={showPw?"text":"password"} value={authPw}
+                  onChange={e=>setAuthPw(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&handleAuth()}
+                  placeholder="••••••••"/>
+                <button className="auth-pw-toggle" type="button" tabIndex={-1}
+                  onClick={()=>setShowPw(s=>!s)}>
+                  {showPw?"🙈":"👁"}
+                </button>
+              </div>
             </div>
             <button className="auth-btn" disabled={authLoading} onClick={handleAuth}>
               {authLoading?"Please wait...":(authMode==="signin"?"Sign In":"Create Account")}
@@ -2901,36 +2820,53 @@ export default function App(){
     )}
     <div style={{background:"var(--s)",border:"1px solid var(--b)",borderRadius:12,overflow:"hidden"}}>
       <table className="attbl">
-        <thead><tr><th>Subject</th><th>Attended</th><th>Total</th><th>Remaining</th><th>%</th><th>Status</th><th>Exam Date</th><th></th></tr></thead>
-        <tbody>
-          {subs.map(s=>{
-            const pct=s.tot>0?Math.round((s.att/s.tot)*100):0;
-            const rem=s.rem||0; // remaining classes in semester
-            const projPct=rem>0?Math.round(((s.att+rem)/(s.tot+rem))*100):pct;
-            const need=pct>=75?0:Math.ceil((0.75*s.tot-s.att)/(1-0.75));
-            const canMiss=pct>=75?Math.floor((s.att-0.75*s.tot)/0.75):0;
-            // With remaining classes: can they recover?
-            const canRecover=pct<75&&rem>0&&projPct>=75;
-            const impossible=pct<75&&rem>0&&projPct<75;
-            const cl=pct>=75?"var(--a3)":pct>=70?"var(--w)":"var(--d)";
-            let statusText,statusColor;
-            if(pct>=75){statusText=canMiss>0?`Can skip ${canMiss}`:"Safe ✓";statusColor="var(--a3)";}
-            else if(impossible){statusText="Cannot recover";statusColor="var(--d)";}
-            else if(canRecover){statusText=`Need ${need} of ${rem} left`;statusColor="var(--w)";}
-            else{statusText=`${need} more needed`;statusColor="var(--d)";}
-            return(<tr key={s.id}>
-              <td style={{fontWeight:400}}>{s.name}</td>
-              <td><input className="ism" value={s.att} onChange={e=>updSub(s.id,"att",+e.target.value)}/></td>
-              <td><input className="ism" value={s.tot} onChange={e=>updSub(s.id,"tot",+e.target.value)}/></td>
-              <td><input className="ism" value={s.rem||0} placeholder="0" title="Remaining classes this semester" onChange={e=>updSub(s.id,"rem",+e.target.value)}/></td>
-              <td><span style={{fontFamily:"var(--fm)",fontSize:13,fontWeight:500,color:cl}}>{pct}%{rem>0&&<span style={{fontSize:10,color:"var(--m)",marginLeft:4}}>→{projPct}%</span>}</span></td>
-              <td style={{fontFamily:"var(--fm)",fontSize:11,color:statusColor}}>{statusText}</td>
-              <td><input className="ism" style={{width:100}} value={s.exam} onChange={e=>updSub(s.id,"exam",e.target.value)}/></td>
-              <td><button className="bd" onClick={()=>delSub(s.id)}>✕</button></td>
-            </tr>);
-          })}
-        </tbody>
-      </table>
+  <thead><tr><th>Subject</th><th>Attended</th><th>Total</th><th>Remaining</th><th>%</th><th>Status</th><th>Exam Date</th><th></th></tr></thead>
+  <tbody>
+    {subs.map(s=>{
+      const pct=s.tot>0?Math.round((s.att/s.tot)*100):0;
+      const rem=s.rem||0;
+      const projPct=rem>0?Math.round(((s.att+rem)/(s.tot+rem))*100):pct;
+      const need=pct>=75?0:Math.ceil((0.75*s.tot-s.att)/(1-0.75));
+      const canMiss=pct>=75?Math.floor((s.att-0.75*s.tot)/0.75):0;
+      const canRecover=pct<75&&rem>0&&projPct>=75;
+      const impossible=pct<75&&rem>0&&projPct<75;
+      const cl=pct>=75?"var(--a3)":pct>=70?"var(--w)":"var(--d)";
+      let statusText,statusColor;
+      if(pct>=75){statusText=canMiss>0?`Can skip ${canMiss}`:"Safe ✓";statusColor="var(--a3)";}
+      else if(impossible){statusText="Cannot recover";statusColor="var(--d)";}
+      else if(canRecover){statusText=`Need ${need} of ${rem} left`;statusColor="var(--w)";}
+      else{statusText=`${need} more needed`;statusColor="var(--d)";}
+      return(<tr key={s.id}>
+        <td style={{fontWeight:400}}>{s.name}</td>
+        <td>
+          <div style={{display:"flex",alignItems:"center",gap:3}}>
+            <button className="bd" style={{padding:"2px 5px",fontSize:10}} onClick={()=>updSub(s.id,"att",Math.max(0,s.att-1))}>▼</button>
+            <input className="ism" style={{width:36,padding:"3px 0",margin:0}} value={s.att} onChange={e=>updSub(s.id,"att",+e.target.value)}/>
+            <button className="bd" style={{padding:"2px 5px",fontSize:10}} onClick={()=>updSub(s.id,"att",s.att+1)}>▲</button>
+          </div>
+        </td>
+        <td>
+          <div style={{display:"flex",alignItems:"center",gap:3}}>
+            <button className="bd" style={{padding:"2px 5px",fontSize:10}} onClick={()=>updSub(s.id,"tot",Math.max(0,s.tot-1))}>▼</button>
+            <input className="ism" style={{width:36,padding:"3px 0",margin:0}} value={s.tot} onChange={e=>updSub(s.id,"tot",+e.target.value)}/>
+            <button className="bd" style={{padding:"2px 5px",fontSize:10}} onClick={()=>updSub(s.id,"tot",s.tot+1)}>▲</button>
+          </div>
+        </td>
+        <td>
+          <div style={{display:"flex",alignItems:"center",gap:3}}>
+            <button className="bd" style={{padding:"2px 5px",fontSize:10}} onClick={()=>updSub(s.id,"rem",Math.max(0,(s.rem||0)-1))}>▼</button>
+            <input className="ism" style={{width:36,padding:"3px 0",margin:0}} value={s.rem||0} placeholder="0" title="Remaining classes this semester" onChange={e=>updSub(s.id,"rem",+e.target.value)}/>
+            <button className="bd" style={{padding:"2px 5px",fontSize:10}} onClick={()=>updSub(s.id,"rem",(s.rem||0)+1)}>▲</button>
+          </div>
+        </td>
+        <td><span style={{fontFamily:"var(--fm)",fontSize:13,fontWeight:500,color:cl}}>{pct}%{rem>0&&<span style={{fontSize:10,color:"var(--m)",marginLeft:4}}>→{projPct}%</span>}</span></td>
+        <td style={{fontFamily:"var(--fm)",fontSize:11,color:statusColor}}>{statusText}</td>
+        <td><input className="ism" style={{width:100}} value={s.exam} onChange={e=>updSub(s.id,"exam",e.target.value)}/></td>
+        <td><button className="bd" onClick={()=>delSub(s.id)}>✕</button></td>
+      </tr>);
+    })}
+  </tbody>
+</table>
     </div>
     {subs.length===0&&<div className="empty"><div className="ei">📋</div><div className="et">No subjects yet. Click "+ Add Subject" to start.</div></div>}
   </>)}
